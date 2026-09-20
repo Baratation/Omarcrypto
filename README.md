@@ -53,7 +53,7 @@ Requirements: Omarchy with Quickshell, `omarchy` on `PATH`, and internet access
 for price queries.
 
 ```bash
-git clone https://github.com/Baratation/Omarcrypto.git
+git clone https://github.com/neuralcheckpoint/Omarcrypto.git
 cd Omarcrypto
 mkdir -p ~/.config/omarchy/plugins
 cp -a rafa.crypto ~/.config/omarchy/plugins/
