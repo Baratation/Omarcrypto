@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "rafa.crypto",
+  "name": "Crypto",
+  "version": "1.7.4",
+  "author": "rafa",
+  "description": "Crypto prices in the bar (Binance by default) with chart and price alerts",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Crypto",
+    "description": "Crypto prices with 24h change",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
