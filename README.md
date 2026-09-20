@@ -44,7 +44,7 @@ USD and does not recalculate historical candles using today's exchange rate.
 CoinGecko can also be used directly for simple quotes:
 
 ```bash
-omarchy bar set rafa.crypto provider coingecko
+omarchy bar set neural.crypto provider coingecko
 ```
 
 ## Installation
@@ -56,22 +56,21 @@ for price queries.
 git clone https://github.com/neuralcheckpoint/Omarcrypto.git
 cd Omarcrypto
 mkdir -p ~/.config/omarchy/plugins
-cp -a rafa.crypto ~/.config/omarchy/plugins/
-omarchy plugin validate ~/.config/omarchy/plugins/rafa.crypto
+cp -a neural.crypto ~/.config/omarchy/plugins/
+omarchy plugin validate ~/.config/omarchy/plugins/neural.crypto
 omarchy restart shell
 ```
 
-The technical plugin ID remains `rafa.crypto` so existing Omarchy settings keep
-working.
+The technical plugin ID is `neural.crypto`.
 
 To change settings without opening the panel:
 
 ```bash
-omarchy bar set rafa.crypto coins '["bitcoin","ethereum","solana"]' --json
-omarchy bar set rafa.crypto vs brl
-omarchy bar set rafa.crypto vs2 usd
-omarchy bar set rafa.crypto rotate 8
-omarchy bar set rafa.crypto pin bitcoin
+omarchy bar set neural.crypto coins '["bitcoin","ethereum","solana"]' --json
+omarchy bar set neural.crypto vs brl
+omarchy bar set neural.crypto vs2 usd
+omarchy bar set neural.crypto rotate 8
+omarchy bar set neural.crypto pin bitcoin
 ```
 
 `pin` keeps one coin in the bar; leave it empty to resume cycling. Set `vs2` to
@@ -102,9 +101,9 @@ node tests/crypto-locale-currency.cjs
 
 | Path | Responsibility |
 | --- | --- |
-| `rafa.crypto/BarWidget.qml` | Bar pill and widget IPC |
-| `rafa.crypto/Panel.qml` | State, polling, list, search, and alerts |
-| `rafa.crypto/Chart.qml` | Candles, volume, zoom, and history |
-| `rafa.crypto/Model.js` | Providers, conversion, catalog, and formatting |
-| `rafa.crypto/I18n.js` | Locale detection, translations, and numeric input |
-| `rafa.crypto/Cache.js` / `PersistentCache.qml` | Validated persistent cache |
+| `neural.crypto/BarWidget.qml` | Bar pill and widget IPC |
+| `neural.crypto/Panel.qml` | State, polling, list, search, and alerts |
+| `neural.crypto/Chart.qml` | Candles, volume, zoom, and history |
+| `neural.crypto/Model.js` | Providers, conversion, catalog, and formatting |
+| `neural.crypto/I18n.js` | Locale detection, translations, and numeric input |
+| `neural.crypto/Cache.js` / `PersistentCache.qml` | Validated persistent cache |

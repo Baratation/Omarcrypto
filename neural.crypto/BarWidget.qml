@@ -10,7 +10,7 @@ import "Model.js" as Model
 // clicks to it and exposes the IPC surface for the shell.
 BarWidget {
   id: root
-  moduleName: "rafa.crypto"
+  moduleName: "neural.crypto"
 
   readonly property var panel: panelLoader.item
   readonly property bool hasQuote: !!panel && panel.hasData
@@ -85,7 +85,7 @@ BarWidget {
   implicitHeight: button.implicitHeight
 
   IpcHandler {
-    target: "rafa.crypto"
+    target: "neural.crypto"
 
     function refresh(): void { root.broadcast("refresh") }
     function open(): void { root.broadcast("open") }

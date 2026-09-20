@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const i=vm.createContext({});vm.runInContext(fs.readFileSync(`${__dirname}/../rafa.crypto/I18n.js`,'utf8').replace('.pragma library',''),i);
-const m=vm.createContext({I18n:i});vm.runInContext(fs.readFileSync(`${__dirname}/../rafa.crypto/Model.js`,'utf8').replace('.pragma library','').replace('.import "I18n.js" as I18n',''),m);
+const i=vm.createContext({});vm.runInContext(fs.readFileSync(`${__dirname}/../neural.crypto/I18n.js`,'utf8').replace('.pragma library',''),i);
+const m=vm.createContext({I18n:i});vm.runInContext(fs.readFileSync(`${__dirname}/../neural.crypto/Model.js`,'utf8').replace('.pragma library','').replace('.import "I18n.js" as I18n',''),m);
 for(const [locale,formatted,label] of [['en_US','1,234.56','Create alert'],['pt_BR','1.234,56','Criar alerta'],['es_ES','1234,56','Crear alerta'],['fr_FR','1\u202f234,56','Créer l’alerte'],['de_DE','1.234,56','Alarm erstellen']]) {
  i.localeOverride=locale;
  assert.equal(m.formatNumber(1234.56,2),formatted,locale);

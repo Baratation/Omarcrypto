@@ -1,7 +1,7 @@
 .pragma library
 .import "I18n.js" as I18n
 
-// Pure helpers for rafa.crypto: provider URLs (Binance by default, CoinGecko
+// Pure helpers for neural.crypto: provider URLs (Binance by default, CoinGecko
 // optional), response parsing, the searchable coin catalogue, pt-BR number
 // formatting and display metadata. The panel owns all state.
 

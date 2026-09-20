@@ -6,7 +6,7 @@ import "Model.js" as Model
 import "I18n.js" as I18n
 import "Cache.js" as Cache
 
-// Candlestick chart for one coin, embedded in the rafa.crypto panel. Fetches
+// Candlestick chart for one coin, embedded in the neural.crypto panel. Fetches
 // Binance klines for the selected timeframe and draws candles, volume and a
 // last-price tag on a Canvas; the pointer inspects OHLC values. The panel
 // owns currency/interval choices and injects them from the outside.

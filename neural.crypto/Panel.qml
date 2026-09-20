@@ -7,15 +7,15 @@ import "Model.js" as Model
 import "I18n.js" as I18n
 import "Cache.js" as Cache
 
-// Market poller and detail popup for the rafa.crypto bar pill. The pill
+// Market poller and detail popup for the neural.crypto bar pill. The pill
 // forwards clicks and IPC here; configuration (`coins`, `provider`, `vs`,
 // `vs2`, `rotate`) is read from this widget's inline shell.json entry and
 // hot-reloads on save. The middle of the panel is the coin picker, which
 // writes the same entry back through the host widget.
 Panel {
   id: root
-  moduleName: "rafa.crypto"
-  ipcTarget: "rafa.crypto"
+  moduleName: "neural.crypto"
+  ipcTarget: "neural.crypto"
   manageIpc: false
 
   property var anchorItem: null

@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-function load(name) { const ctx=vm.createContext(name==='Model'?{I18n:load('I18n')}:{}); vm.runInContext(fs.readFileSync(`${__dirname}/../rafa.crypto/${name}.js`,'utf8').replace('.pragma library','').replace('.import "I18n.js" as I18n',''),ctx);return ctx; }
+function load(name) { const ctx=vm.createContext(name==='Model'?{I18n:load('I18n')}:{}); vm.runInContext(fs.readFileSync(`${__dirname}/../neural.crypto/${name}.js`,'utf8').replace('.pragma library','').replace('.import "I18n.js" as I18n',''),ctx);return ctx; }
 const m=load('Model');
 const legacy={id:'bitcoin|above|100000.00000000',coin:'bitcoin',vs:'usd',dir:'above',price:100000,armed:true};
 let alerts=m.normalizedAlerts([legacy,{...legacy,vs:'brl'}]);
