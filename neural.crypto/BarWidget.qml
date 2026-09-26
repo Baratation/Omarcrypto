@@ -4,8 +4,9 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "fx"
 
-// CoinGecko price pill. The popup (Panel.qml) owns polling, retries and the
+// Crypto price pill. The popup (Panel.qml) owns polling, retries and the
 // coin list; this widget only mirrors what the panel publishes, forwards
 // clicks to it and exposes the IPC surface for the shell.
 BarWidget {
@@ -18,7 +19,15 @@ BarWidget {
 
   // Themes may pin crypto.gain in shell.toml; otherwise a muted green that
   // reads well on the dark bar palettes.
-  readonly property color gainColor: Color.flatColor(Color.pick("crypto.gain", "#8ec07c"), "#8ec07c")
+  readonly property color gainColor: Color.flatColor(Color.pick("crypto.gain", hue.green), hue.green)
+
+  FxPalette { id: hue }
+
+  readonly property bool fancy: !(root.bar && root.bar.vertical) && hasQuote && !!panel.primary
+  readonly property color ink: bar ? bar.barForeground : Color.foreground
+  readonly property string arrowText: hasQuote ? Model.arrow(change) : ""
+  // The primary coin's last 24 h, kept fresh by the panel.
+  readonly property var spark: panel && panel.primarySpark ? panel.primarySpark : []
 
   readonly property color trendColor: panel && panel.stale ? (bar ? bar.urgent : Color.urgent) : !hasQuote
     ? (bar ? bar.barForeground : Color.foreground)
@@ -65,6 +74,13 @@ BarWidget {
       root.bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
+  function retireLegacyAlerts() {
+    if (!root.settings || root.settings.alerts === undefined) return
+    var entry = Object.assign({}, root.settings, {id: root.moduleName})
+    delete entry.alerts
+    root.settings = entry
+    if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
   function injectPanel() {
     var target = panelLoader.item
     if (!target) return
@@ -111,11 +127,13 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: root.panel ? root.panel.label : ""
+    labelVisible: !root.fancy
     active: true
     useActiveColor: true
     activeColor: root.trendColor
-    horizontalMargin: 3
-    fixedWidth: root.bar && root.bar.vertical ? -1 : Math.max(Style.space(80), labelMetrics.width + Style.space(6))
+    horizontalMargin: 8.5
+    fixedWidth: root.bar && root.bar.vertical ? -1
+      : Math.max(Style.space(80), (root.fancy ? ticker.implicitWidth : labelMetrics.width) + Style.space(17))
     TextMetrics {
       id: labelMetrics
       font.family: button.fontFamily
@@ -125,9 +143,117 @@ BarWidget {
     tooltipText: root.panel ? root.panel.tooltip : ""
 
     onPressed: function(b) {
+      pill.bump()
       if (b === Qt.RightButton) root.notify()
       else if (b === Qt.MiddleButton) root.refresh()
       else root.togglePanel()
+    }
+
+    FxPill {
+      id: pill
+      hovered: button.tooltipHovered || root.opened
+      alert: root.panel ? root.panel.stale : false
+      alertColor: root.bar ? root.bar.urgent : Color.urgent
+      tint: root.trendColor
+      restAlpha: 0.06
+    }
+
+    FxSparkline {
+      visible: root.fancy && root.spark.length > 1
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.leftMargin: Style.space(5)
+      anchors.rightMargin: Style.space(5)
+      anchors.bottomMargin: Style.space(3)
+      height: parent.height * 0.6
+      values: root.spark
+      color: root.trendColor
+      fillAlpha: 0.2
+      lineWidth: 1
+      glow: 3
+      glide: false
+      showHead: false
+      opacity: button.tooltipHovered ? 0.85 : 0.45
+      Behavior on opacity { NumberAnimation { duration: 200 } }
+    }
+
+    Row {
+      id: ticker
+      visible: root.fancy
+      anchors.centerIn: parent
+      spacing: Style.space(4)
+
+      Text {
+        visible: root.panel ? root.panel.stale : false
+        anchors.verticalCenter: parent.verticalCenter
+        text: "⚠"
+        color: root.bar ? root.bar.urgent : Color.urgent
+        font.family: button.fontFamily
+        font.pixelSize: button.fontSize
+      }
+
+      Text {
+        id: symbol
+        anchors.verticalCenter: parent.verticalCenter
+        text: root.panel && root.panel.primaryId ? Model.tickerFor(root.panel.primaryId) : ""
+        color: hue.mix(root.ink, root.trendColor, 0.35)
+        font.family: button.fontFamily
+        font.pixelSize: button.fontSize
+        font.bold: true
+        renderType: Text.NativeRendering
+
+        // A new coin rotating in slides up into place.
+        onTextChanged: swap.restart()
+        transform: Translate { id: swapShift }
+        ParallelAnimation {
+          id: swap
+          NumberAnimation { target: swapShift; property: "y"; from: 8; to: 0; duration: 420; easing.type: Easing.OutBack }
+          NumberAnimation { target: ticker; property: "opacity"; from: 0.2; to: 1; duration: 320 }
+        }
+      }
+
+      FxNumber {
+        anchors.verticalCenter: parent.verticalCenter
+        value: root.panel && root.panel.primary ? root.panel.primary.price : NaN
+        formatter: Model.formatCompact
+        snapRatio: 0.2
+        baseColor: root.trendColor
+        upColor: hue.mix(root.gainColor, "#ffffff", 0.35)
+        downColor: hue.mix(root.bar ? root.bar.urgent : Color.urgent, "#ffffff", 0.3)
+        flashOnChange: true
+        // Only moves of 0.1% or more are worth a flash or a roll.
+        flashThreshold: Math.abs(value) * 0.001
+        rollThreshold: Math.abs(value) * 0.001
+        duration: 600
+        font.family: button.fontFamily
+        font.pixelSize: button.fontSize
+
+        Behavior on baseColor { ColorAnimation { duration: 500 } }
+      }
+
+      Text {
+        id: arrowGlyph
+        visible: root.arrowText !== ""
+        anchors.verticalCenter: parent.verticalCenter
+        text: root.arrowText
+        color: root.trendColor
+        font.family: button.fontFamily
+        font.pixelSize: button.fontSize - 2
+        transform: Translate { id: bob }
+
+        // The arrow nudges in its own direction when a new quote lands.
+        Connections {
+          target: root.panel
+          function onPricesChanged() { if (arrowGlyph.visible) nudge.restart() }
+        }
+
+        SequentialAnimation {
+          id: nudge
+          NumberAnimation { target: bob; property: "y"; to: root.change < 0 ? 2.5 : -2.5; duration: 180; easing.type: Easing.OutQuad }
+          NumberAnimation { target: bob; property: "y"; to: 0; duration: 420; easing.type: Easing.OutBounce }
+        }
+      }
     }
   }
 }

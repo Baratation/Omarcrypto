@@ -738,5 +738,23 @@ var strings = {
     "es": " · vela ",
     "fr": " · bougie ",
     "de": " · Kerze "
+  },
+  "Não foi possível ler os alertas; arquivo preservado": {
+    "en": "Could not read the alerts; the file was left untouched",
+    "es": "No se pudieron leer las alertas; el archivo se conservó",
+    "fr": "Impossible de lire les alertes ; le fichier est conservé",
+    "de": "Alarme konnten nicht gelesen werden; Datei unverändert"
+  },
+  "Não foi possível salvar os alertas": {
+    "en": "Could not save the alerts",
+    "es": "No se pudieron guardar las alertas",
+    "fr": "Impossible d’enregistrer les alertes",
+    "de": "Alarme konnten nicht gespeichert werden"
+  },
+  "Alertas conferidos a cada 30 s; um pico entre duas consultas pode passar despercebido.": {
+    "en": "Alerts are checked every 30 s; a spike between two checks can be missed.",
+    "es": "Las alertas se revisan cada 30 s; un pico entre dos consultas puede pasar inadvertido.",
+    "fr": "Alertes vérifiées toutes les 30 s ; un pic entre deux vérifications peut passer inaperçu.",
+    "de": "Alarme werden alle 30 s geprüft; eine Spitze zwischen zwei Abfragen kann unbemerkt bleiben."
   }
 }

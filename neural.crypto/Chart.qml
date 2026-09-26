@@ -5,6 +5,7 @@ import qs.Ui
 import "Model.js" as Model
 import "I18n.js" as I18n
 import "Cache.js" as Cache
+import "fx"
 
 // Candlestick chart for one coin, embedded in the neural.crypto panel. Fetches
 // Binance klines for the selected timeframe and draws candles, volume and a
@@ -77,7 +78,8 @@ Item {
 
   readonly property var pair: Model.chartPair(root.coinId, root.vs)
   readonly property string chartCurrency: root.pair ? root.pair.currency : "usd"
-  readonly property color gainColor: Color.flatColor(Color.pick("crypto.gain", "#8ec07c"), "#8ec07c")
+  readonly property color gainColor: Color.flatColor(Color.pick("crypto.gain", hue.green), hue.green)
+  FxPalette { id: hue }
   readonly property color lossColor: root.bar ? root.bar.urgent : Color.urgent
   readonly property color foreground: root.bar ? root.bar.foreground : Color.foreground
   readonly property color tagTextColor: root.bar ? root.bar.background : Color.background

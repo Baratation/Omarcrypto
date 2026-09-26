@@ -4,8 +4,10 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "fx"
 import "I18n.js" as I18n
 import "Cache.js" as Cache
+import "Http.js" as Http
 
 // Market poller and detail popup for the neural.crypto bar pill. The pill
 // forwards clicks and IPC here; configuration (`coins`, `provider`, `vs`,
@@ -40,7 +42,55 @@ Panel {
     return out
   }
   readonly property string vsLabel: (provider === "binance" && vs === "usd" ? "USDT" : vs.toUpperCase()) + (vs2 !== "" && vs2 !== vs ? "/" + (provider === "binance" && vs2 === "usd" ? "USDT" : vs2.toUpperCase()) : "")
-  readonly property var alerts: Model.normalizedAlerts(setting("alerts", []))
+  property var savedAlerts: []
+  property bool alertsReady: false
+  property string alertError: ""
+  property var alertQueue: []
+  // Alerts live in their own file, changed only by the `alerts` script that
+  // ships next to this panel (lock + atomic replace, shared by all monitors).
+  readonly property string alertsBackend: decodeURIComponent(Qt.resolvedUrl("alerts").toString().replace(/^file:\/\//, ""))
+  readonly property var alerts: Model.normalizedAlerts(savedAlerts)
+  function applyAlerts(raw) {
+    try {
+      var data = JSON.parse(raw)
+      if (!Array.isArray(data.alerts)) return
+      savedAlerts = data.alerts
+      alertsReady = true
+      if (hostWidget && hostWidget.retireLegacyAlerts) hostWidget.retireLegacyAlerts()
+    } catch (e) { alertError = I18n.tr("Não foi possível ler os alertas; arquivo preservado") }
+  }
+  function alertCommand(op, payload) {
+    alertQueue = alertQueue.concat([{op: op, payload: payload || {}}])
+    nextAlertCommand()
+  }
+  function nextAlertCommand() {
+    if (alertWriter.running || !alertQueue.length) return
+    var command = alertQueue[0]
+    alertQueue = alertQueue.slice(1)
+    alertError = ""
+    alertWriter.command = [root.alertsBackend, command.op, JSON.stringify(command.payload)]
+    alertWriter.running = true
+  }
+  FileView {
+    id: alertsFile
+    path: (Quickshell.env("XDG_DATA_HOME") || Quickshell.env("HOME") + "/.local/share") + "/omarchy/crypto/alerts.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.applyAlerts(text())
+    property bool attempted: false
+    onLoadFailed: if (!attempted) { attempted = true; root.alertCommand("init", {}) }
+  }
+  Process {
+    id: alertWriter
+    stdout: StdioCollector { onStreamFinished: root.applyAlerts(text) }
+    stderr: StdioCollector { onStreamFinished: if (text.trim()) root.alertError = text.trim() }
+    onExited: function(code) {
+      alertsFile.reload()
+      if (code !== 0 && !root.alertError) root.alertError = I18n.tr("Não foi possível salvar os alertas")
+      Qt.callLater(root.nextAlertCommand)
+    }
+  }
   readonly property int armedAlertCount: {
     var count = 0
     for (var i = 0; i < alerts.length; i++) if (alerts[i].armed) count++
@@ -64,7 +114,14 @@ Panel {
   property string fxError: ""
   readonly property bool needsFx: root.provider === "binance" && root.currencies.some(function(c) { return c !== "usd" && c !== "brl" })
   readonly property var fetchCurrencies: root.needsFx && root.currencies.indexOf("usd") < 0 ? root.currencies.concat(["usd"]) : root.currencies
-  readonly property string quoteUrl: Model.apiUrl(root.provider, root.coins, root.fetchCurrencies)
+  // Pairs Binance answered as unknown (a typo in shell.json, a coin added
+  // under CoinGecko). One of them fails the whole batch, so after a per-pair
+  // probe they stay out of it for the rest of the session.
+  property var badPairs: []
+  property bool probing: false
+  readonly property string quoteUrl: Model.apiUrl(root.provider, root.coins, root.fetchCurrencies, root.badPairs)
+  // Coins the last successful answer had no price for (delisted, unknown).
+  property var missingCoins: []
   readonly property string priceCacheKey: root.provider + ":" + root.coins.join(",") + ":" + root.currencies.join(",")
   readonly property string fxUrl: Model.coingeckoUrl(["tether"], Model.CURRENCIES.filter(function(c) { return c !== "usd" && c !== "brl" }))
   property var prices: ({})
@@ -85,6 +142,8 @@ Panel {
 
   // Embedded views: the coin list (default) or the candle chart of one coin.
   property string view: "list"
+
+  FxPalette { id: hue }
   property string listTab: "coins"
   property bool settingsExpanded: false
   property bool currenciesExpanded: false
@@ -191,7 +250,7 @@ Panel {
   property var binanceBases: []
   property bool binanceLoaded: false
   readonly property var pickerResults: Model.mergePickerResults(
-    Model.searchCatalog(searchQuery, coins),
+    Model.searchCatalog(searchQuery, coins, provider),
     remoteResults,
     coins
   )
@@ -205,6 +264,53 @@ Panel {
   readonly property string primaryId: pinnedId !== "" ? pinnedId : rotateId
   readonly property var primary: primaryId !== "" && prices[primaryId] ? prices[primaryId][vs] || null : null
   readonly property real primaryChange: primary && primary.change !== null ? primary.change : 0
+
+  // The pill draws the primary coin's last 24 h. The list sparklines only
+  // poll while the panel is open, so the pill keeps its own 5-minute series,
+  // and its last point follows the live quote so the line never lags the
+  // number next to it (only when the series is in the quote's currency).
+  property var primarySparkValues: []
+  property string primarySparkKey: ""
+  readonly property var primarySpark: {
+    var values = primarySparkValues
+    var pair = Model.chartPair(primaryId, vs)
+    if (!pair || pair.pair !== primarySparkKey || values.length < 2) return []
+    if (!primary || pair.currency !== vs) return values
+    var out = values.slice()
+    out[out.length - 1] = primary.price
+    return out
+  }
+  function refreshPrimarySpark() {
+    var pair = Model.chartPair(root.primaryId, root.vs)
+    if (!pair) { primarySparkReq.cancel(); root.primarySparkValues = []; root.primarySparkKey = ""; return }
+    if (pair.pair !== root.primarySparkKey) {
+      var saved = root.sparkCache[pair.pair] || Cache.get("sparks", pair.pair)
+      root.primarySparkValues = saved ? saved.values : []
+      root.primarySparkKey = pair.pair
+      if (saved && Date.now() - saved.at < 300000) return
+    }
+    primarySparkReq.get(Model.klinesUrl(pair.pair, "15m", 97), 240000, 1)
+  }
+  Request {
+    id: primarySparkReq
+    onCompleted: function(status, body, at) {
+      if (status !== 200) return
+      try {
+        var key = Model.chartPair(root.primaryId, root.vs)
+        var values = Model.parseKlines(body).map(function(c) { return c.c })
+        if (!key || key.pair !== root.primarySparkKey || values.length < 2) return
+        root.primarySparkValues = values
+        root.rememberSpark(key.pair, { values: values, at: at })
+      } catch (e) {}
+    }
+  }
+  Timer {
+    interval: 300000
+    repeat: true
+    running: root.primed
+    onTriggered: root.refreshPrimarySpark()
+  }
+  onPrimaryIdChanged: if (root.primed) root.refreshPrimarySpark()
 
   function quoteFor(id, currency) {
     var entry = prices[id]
@@ -362,12 +468,7 @@ Panel {
     for (var i = 0; i < coins.length; i++) if (coins[i] !== id) next.push(coins[i])
     if (root.pinnedId === id && hostWidget && hostWidget.setSetting) hostWidget.setSetting("pin", "")
     // Alerts for a coin that is gone would never have a quote to fire on.
-    var remaining = []
-    for (var j = 0; j < root.alerts.length; j++) {
-      if (root.alerts[j].coin === id) continue
-      remaining.push(root.alerts[j])
-    }
-    if (remaining.length !== root.alerts.length) root.setAlerts(remaining)
+    root.alertsFor(id).forEach(function(a) { root.alertCommand("remove", {id: a.id}) })
     if (root.alertCoin === id) root.closeAlertEditor()
     if (root.chartCoin === id) root.backToList()
     root.setCoins(next)
@@ -512,9 +613,7 @@ Panel {
 
   // ---- price alerts --------------------------------------------------------
 
-  function setAlerts(list) {
-    if (hostWidget && hostWidget.setSetting) hostWidget.setSetting("alerts", list)
-  }
+
 
   function alertsFor(id) {
     var out = []
@@ -576,40 +675,35 @@ Panel {
       coin: root.alertCoin, dir: root.targetDirection, price: target, vs: root.alertVs,
       armed: armed, paused: !armed, firedAt: 0, firedPrice: 0
     }
-    root.setAlerts(Model.replaceAlert(root.alerts, alert, root.editingAlertId))
+    if (!root.alertsReady) return
+    var normalized = Model.normalizedAlerts([alert])
+    if (!normalized.length) return
+    root.alertCommand("upsert", {alert: normalized[0], oldId: root.editingAlertId, expected: current || null})
     root.closeAlertEditor()
   }
 
   function removeAlert(id) {
     if (root.editingAlertId === id) root.closeAlertEditor()
-    var next = []
-    for (var i = 0; i < root.alerts.length; i++) if (root.alerts[i].id !== id) next.push(root.alerts[i])
-    root.setAlerts(next)
+    root.alertCommand("remove", {id: id})
   }
 
   function rearmAlert(id) {
-    root.setAlerts(Model.toggleAlert(root.alerts, id))
+    root.alertCommand("toggle", {id: id})
   }
 
   // One-shot trigger check, run after every successful quote refresh. Fired
   // alerts stay listed (disarmed) until the user re-arms them.
   function checkAlerts() {
-    if (root.restoredPrices || root.alerts.length === 0) return
-    var changed = false
-    var fired = []
+    if (!root.alertsReady || root.restoredPrices || root.alerts.length === 0 || alertWriter.running) return
+    var events = []
     for (var i = 0; i < root.alerts.length; i++) {
       var alert = root.alerts[i]
       if (!alert.armed) continue
       var quote = root.quoteFor(alert.coin, alert.vs)
       if (!quote || (quote.fxAt && (!root.fxFresh || Date.now() - quote.fxAt > 150000)) || !Model.alertCrossed(alert, quote.price)) continue
-      alert.armed = false
-      alert.firedAt = Date.now()
-      alert.firedPrice = quote.price
-      fired.push({ alert: alert, price: quote.price })
-      changed = true
+      events.push({id: alert.id, expected: alert, price: quote.price, message: Model.alertMessage(alert, quote.price)})
     }
-    if (changed) root.setAlerts(root.alerts)
-    for (var j = 0; j < fired.length; j++) root.notifyAlert(fired[j].alert, fired[j].price)
+    if (events.length) root.alertCommand("fire", {events: events})
   }
 
   function notifyAlert(alert, price) {
@@ -700,14 +794,18 @@ Panel {
       return
     }
     if (status !== 200 || !body) {
-      root.apiError = Model.apiError(root.provider, status, body)
+      // No answer at all (timeout, dead connection) is a connection problem,
+      // not an API error; handleFailure flags it as such.
+      root.apiError = status === 0 ? "" : Model.apiError(root.provider, status, body)
       root.cycleParsed = false
+      if (root.provider === "binance" && Model.isUnknownSymbol(status, body)) root.probePairs()
       return
     }
 
     try {
       var parsed = Model.parseQuotes(root.provider, body, root.coins, root.fetchCurrencies)
       if (Object.keys(parsed).length === 0) return
+      root.missingCoins = root.coins.filter(function(id) { return !parsed[id] })
       root.basePrices = parsed
       root.baseFetchedAt = at
       root.restoredPrices = false
@@ -724,6 +822,32 @@ Panel {
       root.cycleParsed = false
     }
   }
+  // Asks for each pair on its own to find the ones Binance does not know,
+  // then retries the batch without them.
+  function probePairs() {
+    if (root.probing) return
+    var pairs = Model.binancePairs(root.coins, root.fetchCurrencies, root.badPairs)
+    if (!pairs.length) return
+    root.probing = true
+    probeDeadline.restart()
+    var serial = ++root.probeSerial, pending = pairs.length, unknown = []
+    pairs.forEach(function(pair) {
+      Http.request(Model.binanceTickerUrl(pair), 60000, 4, function(response) {
+        if (serial !== root.probeSerial) return
+        if (Model.isUnknownSymbol(response.status, response.body)) unknown.push(pair)
+        if (--pending > 0) return
+        root.probing = false
+        probeDeadline.stop()
+        if (!unknown.length) return
+        console.warn("crypto: Binance does not list " + unknown.join(", ") + "; leaving them out")
+        root.badPairs = root.badPairs.concat(unknown)
+        Qt.callLater(root.cycleRefresh)
+      })
+    })
+  }
+  property int probeSerial: 0
+  Timer { id: probeDeadline; interval: 15000; onTriggered: { root.probeSerial++; root.probing = false } }
+
   Request {
     id: priceProc
     onCompleted: function(status, body, at) {
@@ -834,6 +958,7 @@ Panel {
     onTriggered: {
       root.rebuildPrices()
       root.refreshFx()
+      root.refreshPrimarySpark()
       if (root.quoteUrl !== root.lastUrl) root.cycleRefresh()
     }
   }
@@ -867,6 +992,7 @@ Panel {
   onVs2Changed: if (root.primed) configDebounce.restart()
   onProviderChanged: if (root.primed) {
     root.prices = ({}); root.basePrices = ({}); root.baseFetchedAt = 0; root.fetchedAt = 0; root.restoredPrices = false
+    root.missingCoins = []
     root.restorePrices(); configDebounce.restart()
   }
   // A new armed alert in a currency that was not being fetched must trigger a
@@ -879,9 +1005,17 @@ Panel {
   }
   onChartTfChanged: root.injectChart()
   onChartCoinChanged: root.injectChart()
-  onViewChanged: root.injectChart()
+  onViewChanged: {
+    root.injectChart()
+    if (root.opened) sectionStagger.play()
+  }
+  onListTabChanged: if (root.opened) sectionStagger.play()
   onOpenedChanged: {
     root.injectChart()
+    if (root.opened) {
+      sectionStagger.play()
+      rowStagger.play()
+    }
     if (root.opened) Qt.callLater(root.warmChart)
     else diskCache.flush()
   }
@@ -896,6 +1030,7 @@ Panel {
       root.primed = true
       root.restorePrices()
       root.cycleRefresh()
+      root.refreshPrimarySpark()
     }
   }
 
@@ -970,6 +1105,8 @@ Panel {
           id: column
           width: scroll.width
           spacing: Style.space(12)
+
+          FxStagger { id: sectionStagger; container: column; step: 45 }
 
           Item {
             width: parent.width
@@ -1090,6 +1227,17 @@ Panel {
             opacity: 0.12
           }
 
+          Text {
+            visible: root.alertError !== ""
+            width: parent.width
+            textFormat: Text.PlainText
+            text: root.alertError
+            wrapMode: Text.Wrap
+            color: root.bar ? root.bar.urgent : Color.urgent
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
           ButtonGroup {
             visible: root.view === "list"
             width: parent.width
@@ -1134,6 +1282,8 @@ Panel {
             width: parent.width
             spacing: Style.space(6)
 
+            FxStagger { id: rowStagger; container: coinList; step: 40; distance: 16 }
+
             Repeater {
               id: coinRepeater
               model: coinRows
@@ -1150,11 +1300,12 @@ Panel {
                 readonly property bool shown: root.primaryId === modelData
                 readonly property color changeColor: quote && quote.change !== null && quote.change < 0
                   ? root.bar.urgent
-                  : Color.flatColor(Color.pick("crypto.gain", "#8ec07c"), "#8ec07c")
+                  : Color.flatColor(Color.pick("crypto.gain", hue.green), hue.green)
                 readonly property bool hasAlerts: root.alertsFor(modelData).length > 0
 
                 width: parent.width
-                height: Math.max(Style.space(82), coinLeft.height + Style.space(12), coinRight.height + Style.space(12))
+                readonly property bool missing: root.missingCoins.indexOf(modelData) >= 0
+                height: Math.max(Style.space(62), coinLeft.height + Style.space(12), coinRight.height + Style.space(12))
 
                 // Row-wide click: left opens the candle chart, right the alert
                 // editor. The pin/bell/remove areas are siblings on top and
@@ -1250,8 +1401,8 @@ Panel {
                   Text {
                     width: parent.width
                     elide: Text.ElideRight
-                    text: Model.coinName(coinRow.modelData)
-                    color: Qt.darker(root.bar.foreground, 1.5)
+                    text: Model.coinName(coinRow.modelData) + (coinRow.missing ? " · " + I18n.tr("sem cotação") : "")
+                    color: coinRow.missing ? root.bar.urgent : Qt.darker(root.bar.foreground, 1.5)
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.caption
                   }
@@ -1276,8 +1427,8 @@ Panel {
                   vs: root.vs
                   // Fetch once in the background after boot so the first open
                   // is already populated; continue polling only while visible.
-                  active: (root.opened && root.view === "list" && root.listTab === "coins")
-                    || (root.primed && coinRow.index < 12 && coinSpark.fetchedAt === 0)
+                  active: root.opened && root.view === "list" && root.listTab === "coins"
+                  prefetch: root.primed && coinRow.index < 12
                   lineColor: coinRow.changeColor
                   cacheEntry: root.sparkCache[key] || null
                   onCached: function(key, entry) { root.rememberSpark(key, entry) }
@@ -1517,7 +1668,7 @@ Panel {
                 var target = root.alertTargetValue()
                 if (!root.alertQuote() || !isFinite(target)) return Qt.darker(root.bar.foreground, 1.6)
                 return root.targetDirection === "above"
-                  ? Color.flatColor(Color.pick("crypto.gain", "#8ec07c"), "#8ec07c")
+                  ? Color.flatColor(Color.pick("crypto.gain", hue.green), hue.green)
                   : root.bar.urgent
               }
               font.family: root.bar.fontFamily
@@ -1625,7 +1776,7 @@ Panel {
                       textFormat: Text.PlainText
                       text: Model.alertGoalText(alertRow.modelData).replace(Model.currencySymbol(alertRow.modelData.vs), Model.quoteCurrency(root.provider, alertRow.modelData.vs))
                       color: alertRow.modelData.dir === "below" ? root.bar.urgent
-                        : Color.flatColor(Color.pick("crypto.gain", "#8ec07c"), "#8ec07c")
+                        : Color.flatColor(Color.pick("crypto.gain", hue.green), hue.green)
                       font.family: root.bar.fontFamily
                       font.pixelSize: Style.font.bodySmall
                       anchors.verticalCenter: parent.verticalCenter
@@ -1735,6 +1886,17 @@ Panel {
                 }
               }
             }
+          }
+
+          Text {
+            visible: root.view === "list" && root.listTab === "alerts" && root.armedAlertCount > 0
+            width: parent.width
+            textFormat: Text.PlainText
+            text: I18n.tr("Alertas conferidos a cada 30 s; um pico entre duas consultas pode passar despercebido.")
+            wrapMode: Text.Wrap
+            color: Qt.darker(root.bar.foreground, 1.6)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
           }
 
           Button {
@@ -1948,7 +2110,7 @@ Panel {
             text: root.statusDetail
             width: parent.width
             elide: Text.ElideRight
-            color: rateLimited || root.fetchFailed || root.apiError !== "" ? root.bar.urgent : Qt.darker(root.bar.foreground, 1.8)
+            color: root.rateLimited || root.fetchFailed || root.apiError !== "" ? root.bar.urgent : Qt.darker(root.bar.foreground, 1.8)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
           }

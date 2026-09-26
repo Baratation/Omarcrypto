@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Price alerts for neural.crypto, shared by every monitor's panel.
+
+Usage: alerts <init|upsert|remove|toggle|fire> [json-payload]
+
+Alerts live in $XDG_DATA_HOME/omarchy/crypto/alerts.json. Each call takes a
+lock, applies one operation, replaces the file atomically and prints the
+result. Only the call that actually moves an alert to "fired" sends the
+notification, so two monitors never notify twice.
+
+The first call imports older alerts once: from rafa-crypto/alerts.json, or
+from the inline `alerts` setting in shell.json.
+"""
+import fcntl
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+DATA = Path(os.environ.get('XDG_DATA_HOME') or Path.home()/'.local/share')
+BASE = DATA/'omarchy'/'crypto'
+LEGACY = DATA/'rafa-crypto'/'alerts.json'
+CONFIG = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home()/'.config')/'omarchy/shell.json'
+
+def write(path, data):
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.alerts-')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write('\n'); f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp): os.unlink(tmp)
+
+def valid(a):
+    return (isinstance(a, dict) and isinstance(a.get('id'), str)
+        and a.get('coin') and a.get('vs') and a.get('dir') in ('above','below')
+        and isinstance(a.get('price'), (int,float)) and math.isfinite(a['price']) and a['price'] > 0)
+
+def imported():
+    if LEGACY.exists():
+        data=json.loads(LEGACY.read_text())
+        if not isinstance(data,dict) or not isinstance(data.get('alerts'),list):
+            raise ValueError('Alertas antigos inválidos; migração cancelada')
+        alerts=data['alerts']
+    else:
+        alerts=[]
+        legacy=json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+        for entries in legacy.get('bar',{}).get('layout',{}).values():
+            for entry in entries:
+                if entry.get('id')=='neural.crypto': alerts=entry.get('alerts',[])
+    if not isinstance(alerts,list) or not all(valid(a) for a in alerts):
+        raise ValueError('Alertas antigos inválidos; migração cancelada')
+    return {'version':1,'alerts':alerts}
+
+def main():
+    op = sys.argv[1] if len(sys.argv)>1 else 'init'
+    payload = json.loads(sys.argv[2]) if len(sys.argv)>2 else {}
+    BASE.mkdir(parents=True,exist_ok=True)
+    notices=[]
+    with (BASE/'.alerts.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        dest=BASE/'alerts.json'
+        if dest.exists():
+            data=json.loads(dest.read_text())
+            if not isinstance(data,dict) or not isinstance(data.get('alerts'),list):
+                raise ValueError('Arquivo de alertas inválido; preservado sem alterações')
+        else:
+            data=imported()
+            write(dest,data)
+        alerts=data['alerts']; before=json.dumps(alerts,sort_keys=True)
+        if op=='upsert':
+            a=payload['alert']; old=payload.get('oldId','')
+            if not valid(a): raise ValueError('Alerta inválido')
+            expected=payload.get('expected')
+            if old and not any(x==expected for x in alerts if x['id']==old):
+                raise ValueError('Alerta mudou em outro monitor; reabra para editar')
+            alerts[:]=[x for x in alerts if x['id'] not in (old,a['id'])]+[a]
+        elif op=='remove': alerts[:]=[x for x in alerts if x['id']!=payload['id']]
+        elif op=='toggle':
+            for a in alerts:
+                if a['id']==payload['id']:
+                    a['armed']=not a.get('armed',True); a['paused']=not a['armed']
+                    a['firedAt']=0; a['firedPrice']=0
+        elif op=='fire':
+            for event in payload.get('events',[]):
+                for a in alerts:
+                    price=event.get('price')
+                    if a['id']!=event['id'] or not a.get('armed') or a!=event.get('expected'): continue
+                    if not isinstance(price,(int,float)) or not math.isfinite(price) or price<=0: continue
+                    if not (price>=a['price'] if a['dir']=='above' else price<=a['price']): continue
+                    a.update(armed=False,paused=False,firedAt=int(time.time()*1000),firedPrice=price)
+                    notices.append(event.get('message',{}))
+        elif op!='init': raise ValueError('Operação desconhecida')
+        if json.dumps(alerts,sort_keys=True)!=before: write(dest,data)
+        print(json.dumps(data,ensure_ascii=False))
+    # Only the process that committed the transition emits the notification.
+    for msg in notices:
+        subprocess.run(['omarchy-notification-send','--app-name','Crypto','-u','normal',
+                        str(msg.get('title','Crypto')),str(msg.get('body','Alvo atingido'))],
+                       timeout=10,check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+
+if __name__=='__main__':
+    try: main()
+    except Exception as exc:
+        print(str(exc),file=sys.stderr);sys.exit(1)

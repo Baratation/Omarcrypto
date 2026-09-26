@@ -11,7 +11,7 @@ QtObject {
   signal completed(int status, string body, double fetchedAt)
   property Timer deadline: Timer {
     interval: 8000
-    onTriggered: { root.cancel(); root.completed(0, "", Date.now()) }
+    onTriggered: { Http.stalled(root.ticket); root.cancel(); root.completed(0, "", Date.now()) }
   }
   function cancel() {
     generation++

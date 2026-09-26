@@ -8,14 +8,18 @@ charts, alerts, and settings.
 
 ## Features
 
-- Shows the ticker, a compact price, and an up/down trend arrow in the bar. The
-  pill measures its current text and grows only when the value needs more room.
+- Shows the ticker, a compact price, and an up/down trend arrow in the bar,
+  over a faint 24-hour sparkline that follows the live price. The pill only
+  animates when something happens (a new price, hover, a click), so it costs
+  nothing while idle.
 - Opens a watchlist with the primary price, a secondary quote, 24-hour change,
   and a sparkline for each coin.
 - Displays candlesticks, volume, 1-day/1-week/1-month periods, zoom, and
   historical data.
 - Creates, edits, pauses, rearms, and removes price alerts with system
-  notifications.
+  notifications. Alerts are stored in
+  `~/.local/share/omarchy/crypto/alerts.json` and changed only by the bundled
+  `alerts` script, so several monitors never fire the same alert twice.
 - Supports keyboard navigation for selection, search, charts, alerts, pinning,
   refresh, and quote-currency switching.
 - Detects the system locale (Portuguese, English, Spanish, French, and German)
@@ -41,6 +45,19 @@ when a selected currency has no direct pair, the price is converted from USDT
 using the corresponding CoinGecko rate. The widget never assumes that USDT is
 USD and does not recalculate historical candles using today's exchange rate.
 
+A few details keep Binance prices honest:
+
+- Delisted pairs still answer with their last trade; the widget recognizes
+  them by their empty order book and shows "no quote" instead of a frozen price.
+- A coin Binance does not list would make the whole price request fail. The
+  widget then checks each pair alone and leaves the unknown ones out.
+- On thin pairs (some BRL ones) the last trade can sit outside the current
+  order book; the book midpoint is shown instead.
+- If a request hangs (a connection that died in a network drop), the widget
+  moves to another Binance host (`api-gcp.binance.com`,
+  `data-api.binance.vision`) instead of waiting minutes for the system to give
+  up on it.
+
 CoinGecko can also be used directly for simple quotes:
 
 ```bash
@@ -49,8 +66,8 @@ omarchy bar set neural.crypto provider coingecko
 
 ## Installation
 
-Requirements: Omarchy with Quickshell, `omarchy` on `PATH`, and internet access
-for price queries.
+Requirements: Omarchy with Quickshell, `omarchy` on `PATH`, `python3` (for
+the alerts script), and internet access for price queries.
 
 ```bash
 git clone https://github.com/neuralcheckpoint/Omarcrypto.git
@@ -95,7 +112,11 @@ These pure Node.js tests do not require Quickshell:
 node tests/crypto-model.cjs
 node tests/crypto-state.cjs
 node tests/crypto-locale-currency.cjs
+node tests/crypto-binance.cjs
 ```
+
+`crypto-binance.cjs` also runs the `alerts` script (it needs `python3`) against
+a temporary data folder.
 
 ## Project layout
 
@@ -107,3 +128,7 @@ node tests/crypto-locale-currency.cjs
 | `neural.crypto/Model.js` | Providers, conversion, catalog, and formatting |
 | `neural.crypto/I18n.js` | Locale detection, translations, and numeric input |
 | `neural.crypto/Cache.js` / `PersistentCache.qml` | Validated persistent cache |
+| `neural.crypto/Http.js` / `Request.qml` | Shared requests, timeouts, and Binance host failover |
+| `neural.crypto/Sparkline.qml` | Per-coin 24-hour sparkline in the panel |
+| `neural.crypto/alerts` | Alert storage: lock, atomic writes, one notification per crossing |
+| `neural.crypto/fx/` | Shared motion and color components for the pill and panel |

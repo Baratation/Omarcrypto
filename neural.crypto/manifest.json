@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "neural.crypto",
   "name": "Crypto",
-  "version": "1.7.4",
+  "version": "1.8.0",
   "author": "rafa",
   "description": "Crypto prices in the bar (Binance by default) with chart and price alerts",
   "kinds": [

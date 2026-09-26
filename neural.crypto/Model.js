@@ -11,7 +11,9 @@ var COINGECKO_API = "https://api.coingecko.com/api/v3/simple/price"
 
 // Curated catalogue for the picker and for symbol/id resolution. `brl` marks
 // coins with a direct Binance BRL pair; the rest are converted through
-// USDTBRL. Ids follow CoinGecko so the coingecko provider works from the same
+// USDTBRL. `binance: false` marks coins Binance does not trade (checked
+// against exchangeInfo on 2026-09-26): they are priced only by CoinGecko.
+// Ids follow CoinGecko so the coingecko provider works from the same
 // config. Coins outside it are found by the live picker search below.
 var CATALOG = [
   { id: "bitcoin", symbol: "BTC", name: "Bitcoin", glyph: "₿", brl: true },
@@ -32,12 +34,12 @@ var CATALOG = [
   { id: "render-token", symbol: "RENDER", name: "Render", glyph: "", brl: true },
   { id: "shiba-inu", symbol: "SHIB", name: "Shiba Inu", glyph: "Ð", brl: true },
   { id: "sui", symbol: "SUI", name: "Sui", glyph: "", brl: true },
-  { id: "toncoin", symbol: "TON", name: "Toncoin", glyph: "", brl: false },
+  { id: "toncoin", symbol: "TON", name: "Toncoin", glyph: "", brl: false, binance: false },
   { id: "tron", symbol: "TRX", name: "TRON", glyph: "", brl: false },
   { id: "polkadot", symbol: "DOT", name: "Polkadot", glyph: "●", brl: false },
   { id: "stellar", symbol: "XLM", name: "Stellar", glyph: "", brl: false },
   { id: "ethereum-classic", symbol: "ETC", name: "Ethereum Classic", glyph: "", brl: false },
-  { id: "monero", symbol: "XMR", name: "Monero", glyph: "", brl: false },
+  { id: "monero", symbol: "XMR", name: "Monero", glyph: "", brl: false, binance: false },
   { id: "bitcoin-cash", symbol: "BCH", name: "Bitcoin Cash", glyph: "", brl: false },
   { id: "hedera-hashgraph", symbol: "HBAR", name: "Hedera", glyph: "", brl: false },
   { id: "algorand", symbol: "ALGO", name: "Algorand", glyph: "", brl: false },
@@ -52,11 +54,11 @@ var CATALOG = [
   { id: "injective-protocol", symbol: "INJ", name: "Injective", glyph: "", brl: false },
   { id: "sei-network", symbol: "SEI", name: "Sei", glyph: "", brl: false },
   { id: "celestia", symbol: "TIA", name: "Celestia", glyph: "", brl: false },
-  { id: "kaspa", symbol: "KAS", name: "Kaspa", glyph: "", brl: false },
+  { id: "kaspa", symbol: "KAS", name: "Kaspa", glyph: "", brl: false, binance: false },
   { id: "stacks", symbol: "STX", name: "Stacks", glyph: "", brl: false },
   { id: "immutable-x", symbol: "IMX", name: "Immutable", glyph: "", brl: false },
   { id: "the-graph", symbol: "GRT", name: "The Graph", glyph: "", brl: false },
-  { id: "maker", symbol: "MKR", name: "Maker", glyph: "", brl: false },
+  { id: "maker", symbol: "MKR", name: "Maker", glyph: "", brl: false, binance: false },
   { id: "ethena", symbol: "ENA", name: "Ethena", glyph: "", brl: false },
   { id: "worldcoin-wld", symbol: "WLD", name: "Worldcoin", glyph: "", brl: false },
   { id: "fetch-ai", symbol: "FET", name: "Fetch.ai", glyph: "", brl: false },
@@ -148,12 +150,14 @@ function canonicalCoins(list) {
   return out
 }
 
-function searchCatalog(query, addedIds) {
+function searchCatalog(query, addedIds, provider) {
   var q = String(query || "").trim().toLowerCase()
   if (q.length === 0) return []
+  var binance = normalizedProvider(provider) === "binance"
   var out = []
   for (var i = 0; i < CATALOG.length; i++) {
     var entry = CATALOG[i]
+    if (binance && entry.binance === false) continue
     var haystack = (entry.id + " " + entry.symbol + " " + entry.name).toLowerCase()
     if (haystack.indexOf(q) === -1) continue
     out.push({
@@ -301,15 +305,18 @@ function binancePairFor(coin, currency) {
   return coin.symbol + String(currency).toUpperCase()
 }
 
-function binancePairs(coins, currencies) {
+// `exclude` lists pairs Binance rejected as unknown: one unknown symbol makes
+// the whole batch fail, so they stay out of it.
+function binancePairs(coins, currencies, exclude) {
   var pairs = []
+  var skip = exclude || []
   var wantsBrl = currencies.indexOf("brl") !== -1
   function push(pair) {
-    if (pair && pairs.indexOf(pair) === -1) pairs.push(pair)
+    if (pair && pairs.indexOf(pair) === -1 && skip.indexOf(pair) === -1) pairs.push(pair)
   }
   for (var i = 0; i < coins.length; i++) {
     var coin = coinFor(coins[i])
-    if (!coin || !coin.symbol) continue
+    if (!coin || !coin.symbol || coin.binance === false) continue
     push(binancePairFor(coin, "usd"))
     if (wantsBrl && coin.brl) push(coin.symbol + "BRL")
   }
@@ -317,9 +324,18 @@ function binancePairs(coins, currencies) {
   return pairs
 }
 
-function binanceUrl(coins, currencies) {
-  var pairs = binancePairs(coins, currencies)
+function binanceUrl(coins, currencies, exclude) {
+  var pairs = binancePairs(coins, currencies, exclude)
   return BINANCE_API + "?symbols=" + encodeURIComponent(JSON.stringify(pairs))
+}
+
+function binanceTickerUrl(pair) {
+  return BINANCE_API + "?symbol=" + encodeURIComponent(pair)
+}
+
+// Binance's answer to a batch that names a symbol it does not know.
+function isUnknownSymbol(status, body) {
+  return Number(status) === 400 && String(body || "").indexOf("-1121") !== -1
 }
 
 function parseBinance(raw) {
@@ -331,6 +347,14 @@ function parseBinance(raw) {
     if (!item || typeof item !== "object" || !item.symbol) continue
     var price = Number(item.lastPrice)
     if (!isFinite(price)) continue
+    var bid = Number(item.bidPrice), ask = Number(item.askPrice)
+    // A delisted pair (MATICUSDT, XMRUSDT) still answers with its frozen last
+    // trade, but its order book is empty.
+    if (item.bidPrice !== undefined && !(bid > 0) && !(ask > 0)) continue
+    // On a thin pair the last trade can sit outside the current book (NEARBRL
+    // last traded at 24.98 against a 25.11/25.19 book); the midpoint is the
+    // price one would actually get now.
+    if (bid > 0 && ask >= bid && (price < bid || price > ask)) price = (bid + ask) / 2
     var change = Number(item.priceChangePercent)
     out[item.symbol] = { price: price, change: isFinite(change) ? change : null }
   }
@@ -390,10 +414,10 @@ function parseCoingecko(raw, currencies) {
 
 // ---- provider facade ------------------------------------------------------
 
-function apiUrl(provider, coins, currencies) {
+function apiUrl(provider, coins, currencies, exclude) {
   return normalizedProvider(provider) === "coingecko"
     ? coingeckoUrl(coins, currencies)
-    : binanceUrl(coins, currencies)
+    : binanceUrl(coins, currencies, exclude)
 }
 
 function parseQuotes(provider, raw, coins, currencies) {
@@ -447,7 +471,7 @@ function chartIntervalOptions() {
 // USDT) instead of pretending the values are in the main currency.
 function chartPair(coinId, vs) {
   var coin = coinFor(coinId)
-  if (!coin || !coin.symbol) return null
+  if (!coin || !coin.symbol || coin.binance === false) return null
   var currency = normalizedVs(vs)
   if (currency === "brl" && coin.brl) return { pair: coin.symbol + "BRL", currency: "brl", label: "BRL" }
   if (coin.symbol === "USDT") return null
@@ -655,6 +679,7 @@ function quoteSource(provider, id, vs) {
   if (provider !== "binance") return "CoinGecko · " + vs.toUpperCase()
   var coin = coinFor(id)
   if (!coin) return "Binance"
+  if (coin.binance === false) return "Binance · " + I18n.tr("sem cotação")
   if (vs === "brl" && coin.brl) return "Binance · " + coin.symbol + "/BRL" + I18n.tr(" · direto")
   if (vs === "brl") return "Binance · " + coin.symbol + "/USDT × USDT/BRL" + I18n.tr(" · convertido")
   if (vs !== "usd") return "Binance · " + coin.symbol + "/USDT × USDT/" + vs.toUpperCase() + " · CoinGecko" + I18n.tr(" · convertido")
